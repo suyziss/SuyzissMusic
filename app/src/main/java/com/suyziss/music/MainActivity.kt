@@ -28,6 +28,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -41,7 +43,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-data class Track(val id: Long, val title: String, val artist: String, val uri: Uri)
+data class Track(val id: Long, val title: String, val artist: String, val uri: Uri, val artwork: Uri? = null)
 private data class PlayerPrefs(
     val theme: String = "system", val accent: String = "purple",
     val dynamic: Boolean = true, val amoled: Boolean = false, val language: String = "ru"
@@ -152,16 +154,18 @@ fun SuyzissApp() {
     fun scanLibrary() {
         val result = mutableListOf<Track>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST)
+        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM_ID)
         context.contentResolver.query(collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0",
             null, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC")?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
                 result += Track(id, cursor.getString(titleCol) ?: "Unknown track",
-                    cursor.getString(artistCol) ?: "Unknown artist", ContentUris.withAppendedId(collection, id))
+                    cursor.getString(artistCol) ?: "Unknown artist", ContentUris.withAppendedId(collection, id),
+                    Uri.parse("content://media/external/audio/albumart/${cursor.getLong(albumCol)}"))
             }
         }
         tracks = result
@@ -271,7 +275,7 @@ fun SuyzissApp() {
 private fun MiniPlayer(track: Track, playing: Boolean, open: () -> Unit, toggle: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).clickable(onClick = open)) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
+            if (track.artwork != null) AsyncImage(model = track.artwork, contentDescription = "Album art", modifier = Modifier.size(42.dp), contentScale = ContentScale.Crop) else Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(track.title, maxLines = 1, fontWeight = FontWeight.SemiBold)
@@ -300,7 +304,7 @@ private fun FullPlayerScreen(track: Track, controller: MediaController?, playing
         }
         Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
             Box(Modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary.copy(alpha = .42f), MaterialTheme.colorScheme.tertiary.copy(alpha = .18f), MaterialTheme.colorScheme.surfaceVariant))), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(116.dp))
+                if (track.artwork != null) AsyncImage(model = track.artwork, contentDescription = "Album art", modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Crop) else Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(116.dp))
             }
         }
         Column(Modifier.fillMaxWidth()) {
