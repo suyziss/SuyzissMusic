@@ -113,7 +113,11 @@ fun SuyzissApp() {
                 override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     val uri = mediaItem?.localConfiguration?.uri
-                    selected = tracks.firstOrNull { it.uri == uri } ?: selected
+                    if (uri != null) {
+                        selected = Track(mediaItem.mediaId.toLongOrNull() ?: -1L,
+                            mediaItem.mediaMetadata.title?.toString() ?: "Unknown track",
+                            mediaItem.mediaMetadata.artist?.toString() ?: "Unknown artist", uri)
+                    }
                     playbackDuration = player.duration.coerceAtLeast(0L)
                     playbackPosition = player.currentPosition.coerceAtLeast(0L)
                 }
