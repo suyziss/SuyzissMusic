@@ -15,6 +15,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -209,7 +217,7 @@ fun SuyzissApp() {
             },
             bottomBar = {
                 Column {
-                    selected?.let { track -> MiniPlayer(track, isPlaying, { showFullPlayer = true }, { if (isPlaying) controller?.pause() else controller?.play() }) }
+                    AnimatedVisibility(visible = selected != null, enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut()) { selected?.let { track -> MiniPlayer(track, isPlaying, { showFullPlayer = true }, { if (isPlaying) controller?.pause() else controller?.play() }) } }
                     NavigationBar {
                         NavigationBarItem(tab == 0, { tab = 0 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text(tr("Library", "Музыка")) })
                         NavigationBarItem(tab == 1, { tab = 1 }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Telegram") })
@@ -255,12 +263,14 @@ fun SuyzissApp() {
                 }
                             }
         }
-        if (showFullPlayer && selected != null) {
-            BackHandler { showFullPlayer = false }
-            FullPlayerScreen(track = selected!!, controller = controller, playing = isPlaying, position = playbackPosition, duration = playbackDuration,
-                onClose = { showFullPlayer = false }, onToggle = { if (isPlaying) controller?.pause() else controller?.play() },
-                onPrevious = { controller?.seekToPreviousMediaItem() }, onNext = { controller?.seekToNextMediaItem() },
-                onSeek = { controller?.seekTo(it) })
+        AnimatedVisibility(visible = showFullPlayer && selected != null, enter = slideInVertically(initialOffsetY = { it }) + fadeIn(tween(220)), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(tween(180))) {
+            selected?.let { currentTrack ->
+                BackHandler { showFullPlayer = false }
+                FullPlayerScreen(track = currentTrack, controller = controller, playing = isPlaying, position = playbackPosition, duration = playbackDuration,
+                    onClose = { showFullPlayer = false }, onToggle = { if (isPlaying) controller?.pause() else controller?.play() },
+                    onPrevious = { controller?.seekToPreviousMediaItem() }, onNext = { controller?.seekToNextMediaItem() },
+                    onSeek = { controller?.seekTo(it) }, onLyrics = { showLyrics = true })
+            }
         }
         if (showEqualizer) FeatureDialog(tr("Equalizer", "Эквалайзер"),
             tr("Equalizer controls will be connected to the audio session in a later build.",
@@ -290,7 +300,7 @@ private fun MiniPlayer(track: Track, playing: Boolean, open: () -> Unit, toggle:
 
 @Composable
 private fun FullPlayerScreen(track: Track, controller: MediaController?, playing: Boolean, position: Long, duration: Long,
-    onClose: () -> Unit, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onSeek: (Long) -> Unit) {
+    onClose: () -> Unit, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onSeek: (Long) -> Unit, onLyrics: () -> Unit) {
     var slider by remember(track.uri) { mutableFloatStateOf(0f) }
     LaunchedEffect(position, duration) { if (duration > 0L) slider = position.toFloat().coerceIn(0f, duration.toFloat()) }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 22.dp, vertical = 12.dp),
@@ -301,6 +311,7 @@ private fun FullPlayerScreen(track: Track, controller: MediaController?, playing
                 Text("NOW PLAYING", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Suyziss Music", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             }
+            IconButton(onClick = onLyrics) { LyricsGlyph(Modifier.size(23.dp), MaterialTheme.colorScheme.onSurfaceVariant) }
             IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "More") }
         }
         Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
@@ -323,7 +334,7 @@ private fun FullPlayerScreen(track: Track, controller: MediaController?, playing
                 Icon(Icons.Default.Shuffle, "Shuffle", tint = if (controller?.shuffleModeEnabled == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onPrevious, modifier = Modifier.size(58.dp)) { Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(38.dp)) }
-            FilledIconButton(onClick = onToggle, modifier = Modifier.size(76.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pause" else "Play", modifier = Modifier.size(38.dp)) }
+            FilledIconButton(onClick = onToggle, modifier = Modifier.size(76.dp)) { androidx.compose.animation.AnimatedContent(targetState = playing, label = "play_pause_icon") { active -> Icon(if (active) Icons.Default.Pause else Icons.Default.PlayArrow, if (active) "Pause" else "Play", modifier = Modifier.size(38.dp)) } }
             IconButton(onClick = onNext, modifier = Modifier.size(58.dp)) { Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(38.dp)) }
             IconButton(onClick = { controller?.repeatMode = when (controller?.repeatMode) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF } }) {
                 Icon(Icons.Default.Repeat, "Repeat", tint = if (controller?.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -416,12 +427,13 @@ private fun pausePlayback(context: Context) {
 
 @Composable
 private fun TrackRow(track: Track, selected: Boolean, playing: Boolean, onClick: () -> Unit) {
-    Surface(shape = RoundedCornerShape(18.dp),
-        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    val rowColor by animateColorAsState(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, label = "track_row_color")
+    Surface(shape = RoundedCornerShape(18.dp), color = rowColor,
+        modifier = Modifier.fillMaxWidth().animateContentSize().clickable(onClick = onClick)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Icon(Icons.Default.MusicNote, null, Modifier.padding(12.dp))
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(52.dp)) {
+                if (track.artwork != null) AsyncImage(model = track.artwork, contentDescription = "Album art", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                else Icon(Icons.Default.MusicNote, null, Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -429,7 +441,7 @@ private fun TrackRow(track: Track, selected: Boolean, playing: Boolean, onClick:
                 Text(track.artist, maxLines = 1, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Icon(if (playing) Icons.Default.Equalizer else Icons.Default.PlayArrow, contentDescription = "Play")
+            androidx.compose.animation.AnimatedContent(targetState = playing, label = "track_play_state") { active -> Icon(if (active) Icons.Default.Equalizer else Icons.Default.PlayArrow, contentDescription = "Play") }
         }
     }
 }
@@ -455,5 +467,30 @@ private fun FeatureCard(title: String, subtitle: String, icon: androidx.compose.
                 color = MaterialTheme.colorScheme.onSurfaceVariant) }
             Spacer(Modifier.weight(1f)); Icon(Icons.Default.ChevronRight, null)
         }
+    }
+}
+
+
+@Composable
+private fun LyricsGlyph(modifier: Modifier = Modifier, tint: Color = MaterialTheme.colorScheme.onSurface) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val sw = (w * 0.075f).coerceAtLeast(1.5f)
+        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = sw, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.22f, h * 0.12f)
+            lineTo(w * 0.64f, h * 0.12f)
+            lineTo(w * 0.80f, h * 0.28f)
+            lineTo(w * 0.80f, h * 0.88f)
+            lineTo(w * 0.22f, h * 0.88f)
+            close()
+            moveTo(w * 0.64f, h * 0.12f)
+            lineTo(w * 0.64f, h * 0.28f)
+            lineTo(w * 0.80f, h * 0.28f)
+        }
+        drawPath(path, tint, style = stroke)
+        drawLine(tint, androidx.compose.ui.geometry.Offset(w * 0.34f, h * 0.48f), androidx.compose.ui.geometry.Offset(w * 0.68f, h * 0.48f), sw, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        drawLine(tint, androidx.compose.ui.geometry.Offset(w * 0.34f, h * 0.64f), androidx.compose.ui.geometry.Offset(w * 0.68f, h * 0.64f), sw, cap = androidx.compose.ui.graphics.StrokeCap.Round)
     }
 }
