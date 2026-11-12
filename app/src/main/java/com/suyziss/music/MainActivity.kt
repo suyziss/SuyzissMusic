@@ -118,7 +118,7 @@ fun SuyzissApp() {
                     if (uri != null) {
                         selected = Track(mediaItem.mediaId.toLongOrNull() ?: -1L,
                             mediaItem.mediaMetadata.title?.toString() ?: "Unknown track",
-                            mediaItem.mediaMetadata.artist?.toString() ?: "Unknown artist", uri)
+                            mediaItem.mediaMetadata.artist?.toString() ?: "Unknown artist", uri, mediaItem.mediaMetadata.artworkUri)
                     }
                     playbackDuration = player.duration.coerceAtLeast(0L)
                     playbackPosition = player.currentPosition.coerceAtLeast(0L)
@@ -138,7 +138,7 @@ fun SuyzissApp() {
     fun startTrack(index: Int) {
         val player = controller ?: return
         if (tracks.isEmpty()) return
-        val queue = tracks.map { track -> MediaItem.Builder().setMediaId(track.id.toString()).setUri(track.uri).setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).build()).build() }
+        val queue = tracks.map { track -> MediaItem.Builder().setMediaId(track.id.toString()).setUri(track.uri).setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setArtworkUri(track.artwork).build()).build() }
         selected = tracks[index]
         player.setMediaItems(queue, index, C.TIME_UNSET)
         player.prepare()
