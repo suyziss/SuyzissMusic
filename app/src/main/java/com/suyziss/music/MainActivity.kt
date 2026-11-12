@@ -191,7 +191,7 @@ fun SuyzissApp() {
                         FeatureCard(tr("Lyrics", "Тексты песен"), tr("Lyrics for the current track", "Текст текущей песни"), Icons.Default.Lyrics) { showLyrics = true }
                         FeatureCard(tr("Visualizer", "Визуализатор"), tr("Audio-reactive visual experience", "Визуальные эффекты под музыку"), Icons.Default.GraphicEq) { showVisualizer = true }
                     }
-                    else -> SettingsScreen(prefs, ::updatePrefs, tr)
+                    else -> SettingsScreen(prefs, ::updatePrefs, ::tr)
                 }
                 selected?.let { track ->
                     Spacer(Modifier.height(8.dp))
