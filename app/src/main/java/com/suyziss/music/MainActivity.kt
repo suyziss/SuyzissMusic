@@ -11,9 +11,11 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,16 +31,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 data class Track(val id: Long, val title: String, val artist: String, val uri: Uri)
 private data class PlayerPrefs(
     val theme: String = "system", val accent: String = "purple",
-    val dynamic: Boolean = true, val language: String = "ru"
+    val dynamic: Boolean = true, val amoled: Boolean = false, val language: String = "ru"
 )
 
 class MainActivity : ComponentActivity() {
@@ -59,12 +65,12 @@ private fun loadPrefs(context: Context): PlayerPrefs {
     val p = context.getSharedPreferences("suyziss_music", Context.MODE_PRIVATE)
     return PlayerPrefs(p.getString("theme", "system") ?: "system",
         p.getString("accent", "purple") ?: "purple", p.getBoolean("dynamic", true),
-        p.getString("language", "ru") ?: "ru")
+        p.getBoolean("amoled", false), p.getString("language", "ru") ?: "ru")
 }
 private fun savePrefs(context: Context, prefs: PlayerPrefs) {
     context.getSharedPreferences("suyziss_music", Context.MODE_PRIVATE).edit()
         .putString("theme", prefs.theme).putString("accent", prefs.accent)
-        .putBoolean("dynamic", prefs.dynamic).putString("language", prefs.language).apply()
+        .putBoolean("dynamic", prefs.dynamic).putBoolean("amoled", prefs.amoled).putString("language", prefs.language).apply()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,12 +83,11 @@ fun SuyzissApp() {
         "blue" -> Color(0xFFB8C8FF); "green" -> Color(0xFFB6DCC2)
         "pink" -> Color(0xFFFFB1C8); else -> Color(0xFFD0BCFF)
     }
-    val dark = prefs.theme != "light"
+    val dark = when (prefs.theme) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }
     val scheme = when {
         prefs.dynamic && Build.VERSION.SDK_INT >= 31 && dark -> dynamicDarkColorScheme(context)
         prefs.dynamic && Build.VERSION.SDK_INT >= 31 && !dark -> dynamicLightColorScheme(context)
-        dark -> darkColorScheme(primary = accent, onPrimary = Color(0xFF381E72),
-            secondary = accent.copy(alpha = .78f), surface = Color(0xFF141218), background = Color(0xFF141218))
+        dark -> darkColorScheme(primary = accent, onPrimary = Color(0xFF381E72), secondary = accent.copy(alpha = .78f), surface = if (prefs.amoled) Color.Black else Color(0xFF141218), background = if (prefs.amoled) Color.Black else Color(0xFF141218), surfaceVariant = if (prefs.amoled) Color(0xFF101010) else Color(0xFF29242F))
         else -> lightColorScheme(primary = Color(0xFF6750A4), secondary = accent,
             background = Color(0xFFFFF7FF), surface = Color(0xFFFFF7FF))
     }
@@ -91,6 +96,49 @@ fun SuyzissApp() {
     var tab by remember { mutableIntStateOf(0) }
     var tracks by remember { mutableStateOf(emptyList<Track>()) }
     var selected by remember { mutableStateOf<Track?>(null) }
+    var showFullPlayer by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var playbackPosition by remember { mutableLongStateOf(0L) }
+    var playbackDuration by remember { mutableLongStateOf(0L) }
+    val controllerFuture = remember(context) { MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync() }
+    var controller by remember { mutableStateOf<MediaController?>(null) }
+    DisposableEffect(controllerFuture) {
+        controllerFuture.addListener({ controller = runCatching { controllerFuture.get() }.getOrNull() }, ContextCompat.getMainExecutor(context))
+        onDispose { MediaController.releaseFuture(controllerFuture) }
+    }
+    DisposableEffect(controller) {
+        val player = controller
+        if (player != null) {
+            val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val uri = mediaItem?.localConfiguration?.uri
+                    selected = tracks.firstOrNull { it.uri == uri } ?: selected
+                    playbackDuration = player.duration.coerceAtLeast(0L)
+                    playbackPosition = player.currentPosition.coerceAtLeast(0L)
+                }
+                override fun onPlaybackStateChanged(state: Int) { playbackDuration = player.duration.coerceAtLeast(0L) }
+            }
+            player.addListener(listener)
+            onDispose { player.removeListener(listener) }
+        } else onDispose { }
+    }
+    LaunchedEffect(controller, isPlaying) {
+        while (isActive) {
+            controller?.let { playbackPosition = it.currentPosition.coerceAtLeast(0L); playbackDuration = it.duration.coerceAtLeast(0L) }
+            delay(400)
+        }
+    }
+    fun startTrack(index: Int) {
+        val player = controller ?: return
+        if (tracks.isEmpty()) return
+        val queue = tracks.map { track -> MediaItem.Builder().setMediaId(track.id.toString()).setUri(track.uri).setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).build()).build() }
+        selected = tracks[index]
+        player.setMediaItems(queue, index, C.TIME_UNSET)
+        player.prepare()
+        player.play()
+        showFullPlayer = true
+    }
     var showEqualizer by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var showVisualizer by remember { mutableStateOf(false) }
@@ -123,7 +171,11 @@ fun SuyzissApp() {
             catch (_: SecurityException) { }
             val name = it.lastPathSegment?.substringAfterLast('/') ?: "Imported audio"
             Toast.makeText(context, tr("Selected: $name", "Выбран файл: $name"), Toast.LENGTH_SHORT).show()
-            playUri(context, it, name, "Imported audio")
+            controller?.let { player ->
+                selected = Track(-1L, name, "Imported audio", it)
+                val item = MediaItem.Builder().setUri(it).setMediaMetadata(MediaMetadata.Builder().setTitle(name).setArtist("Imported audio").build()).build()
+                player.setMediaItem(item); player.prepare(); player.play(); showFullPlayer = true
+            }
         }
     }
     LaunchedEffect(Unit) {
@@ -147,11 +199,14 @@ fun SuyzissApp() {
                 })
             },
             bottomBar = {
-                NavigationBar {
-                    NavigationBarItem(tab == 0, { tab = 0 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text(tr("Library", "Музыка")) })
-                    NavigationBarItem(tab == 1, { tab = 1 }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Telegram") })
-                    NavigationBarItem(tab == 2, { tab = 2 }, icon = { Icon(Icons.Default.GraphicEq, null) }, label = { Text(tr("Studio", "Студия")) })
-                    NavigationBarItem(tab == 3, { tab = 3 }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(tr("Settings", "Настройки")) })
+                Column {
+                    selected?.let { track -> MiniPlayer(track, isPlaying, { showFullPlayer = true }, { if (isPlaying) controller?.pause() else controller?.play() }) }
+                    NavigationBar {
+                        NavigationBarItem(tab == 0, { tab = 0 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text(tr("Library", "Музыка")) })
+                        NavigationBarItem(tab == 1, { tab = 1 }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Telegram") })
+                        NavigationBarItem(tab == 2, { tab = 2 }, icon = { Icon(Icons.Default.GraphicEq, null) }, label = { Text(tr("Studio", "Студия")) })
+                        NavigationBarItem(tab == 3, { tab = 3 }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text(tr("Settings", "Настройки")) })
+                    }
                 }
             }
         ) { padding ->
@@ -166,11 +221,7 @@ fun SuyzissApp() {
                         if (tracks.isEmpty()) EmptyState(tr("No music found", "Музыка не найдена"),
                             tr("Add MP3 files to your device or import audio using +.", "Добавь MP3 на устройство или импортируй аудио кнопкой +."))
                         else LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(tracks, key = { it.id }) { track ->
-                                TrackRow(track, selected?.id == track.id) {
-                                    selected = track; playUri(context, track.uri, track.title, track.artist)
-                                }
-                            }
+                            items(tracks, key = { it.id }) { track -> TrackRow(track, selected?.id == track.id, isPlaying && selected?.id == track.id) { startTrack(tracks.indexOf(track)) } }
                         }
                     }
                     1 -> {
@@ -193,20 +244,14 @@ fun SuyzissApp() {
                     }
                     else -> SettingsScreen(prefs, ::updatePrefs, ::tr)
                 }
-                selected?.let { track ->
-                    Spacer(Modifier.height(8.dp))
-                    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(track.title, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                Text(track.artist, style = MaterialTheme.typography.labelMedium)
                             }
-                            IconButton(onClick = { pausePlayback(context) }) { Icon(Icons.Default.Pause, tr("Pause", "Пауза")) }
-                        }
-                    }
-                }
-            }
+        }
+        if (showFullPlayer && selected != null) {
+            BackHandler { showFullPlayer = false }
+            FullPlayerScreen(track = selected!!, controller = controller, playing = isPlaying, position = playbackPosition, duration = playbackDuration,
+                onClose = { showFullPlayer = false }, onToggle = { if (isPlaying) controller?.pause() else controller?.play() },
+                onPrevious = { controller?.seekToPreviousMediaItem() }, onNext = { controller?.seekToNextMediaItem() },
+                onSeek = { controller?.seekTo(it) })
         }
         if (showEqualizer) FeatureDialog(tr("Equalizer", "Эквалайзер"),
             tr("Equalizer controls will be connected to the audio session in a later build.",
@@ -216,6 +261,72 @@ fun SuyzissApp() {
         if (showVisualizer) FeatureDialog(tr("Visualizer", "Визуализатор"),
             tr("Audio-reactive visualizer rendering is planned.", "Аудиореактивный визуализатор запланирован.")) { showVisualizer = false }
     }
+}
+
+@Composable
+private fun MiniPlayer(track: Track, playing: Boolean, open: () -> Unit, toggle: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).clickable(onClick = open)) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(track.title, maxLines = 1, fontWeight = FontWeight.SemiBold)
+                Text(track.artist, maxLines = 1, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = toggle) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pause" else "Play") }
+            IconButton(onClick = open) { Icon(Icons.Default.OpenInFull, "Open player") }
+        }
+    }
+}
+
+@Composable
+private fun FullPlayerScreen(track: Track, controller: MediaController?, playing: Boolean, position: Long, duration: Long,
+    onClose: () -> Unit, onToggle: () -> Unit, onPrevious: () -> Unit, onNext: () -> Unit, onSeek: (Long) -> Unit) {
+    var slider by remember(track.uri) { mutableFloatStateOf(0f) }
+    LaunchedEffect(position, duration) { if (duration > 0L) slider = position.toFloat().coerceIn(0f, duration.toFloat()) }
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 22.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) { Icon(Icons.Default.KeyboardArrowDown, "Close player", modifier = Modifier.size(32.dp)) }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("NOW PLAYING", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Suyziss Music", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            }
+            IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "More") }
+        }
+        Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
+            Box(Modifier.background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary.copy(alpha = .42f), MaterialTheme.colorScheme.tertiary.copy(alpha = .18f), MaterialTheme.colorScheme.surfaceVariant))), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Album, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(116.dp))
+            }
+        }
+        Column(Modifier.fillMaxWidth()) {
+            Text(track.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 2)
+            Text(track.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.height(20.dp))
+            Slider(value = slider, onValueChange = { slider = it }, valueRange = 0f..duration.coerceAtLeast(1L).toFloat(), onValueChangeFinished = { onSeek(slider.toLong()) })
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatTime(slider.toLong()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(formatTime(duration), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { controller?.shuffleModeEnabled = !(controller?.shuffleModeEnabled ?: false) }) {
+                Icon(Icons.Default.Shuffle, "Shuffle", tint = if (controller?.shuffleModeEnabled == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onPrevious, modifier = Modifier.size(58.dp)) { Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(38.dp)) }
+            FilledIconButton(onClick = onToggle, modifier = Modifier.size(76.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "Pause" else "Play", modifier = Modifier.size(38.dp)) }
+            IconButton(onClick = onNext, modifier = Modifier.size(58.dp)) { Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(38.dp)) }
+            IconButton(onClick = { controller?.repeatMode = when (controller?.repeatMode) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF } }) {
+                Icon(Icons.Default.Repeat, "Repeat", tint = if (controller?.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+private fun formatTime(milliseconds: Long): String {
+    val seconds = milliseconds.coerceAtLeast(0L) / 1000L
+    return "%d:%02d".format(seconds / 60L, seconds % 60L)
 }
 
 @Composable
@@ -243,6 +354,13 @@ private fun SettingsScreen(prefs: PlayerPrefs, update: (PlayerPrefs) -> Unit, tr
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = prefs.dynamic, onCheckedChange = { update(prefs.copy(dynamic = it, theme = "system")) })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("AMOLED black")
+                Text(tr("Pure black background for OLED screens", "Чёрный фон для OLED-экрана"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = prefs.amoled, onCheckedChange = { update(prefs.copy(amoled = it, dynamic = false, theme = "dark")) })
         }
         Spacer(Modifier.height(16.dp))
         Text(tr("Language", "Язык"), style = MaterialTheme.typography.titleMedium)
@@ -288,7 +406,7 @@ private fun pausePlayback(context: Context) {
 }
 
 @Composable
-private fun TrackRow(track: Track, selected: Boolean, onClick: () -> Unit) {
+private fun TrackRow(track: Track, selected: Boolean, playing: Boolean, onClick: () -> Unit) {
     Surface(shape = RoundedCornerShape(18.dp),
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
@@ -302,7 +420,7 @@ private fun TrackRow(track: Track, selected: Boolean, onClick: () -> Unit) {
                 Text(track.artist, maxLines = 1, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Icon(Icons.Default.PlayArrow, contentDescription = "Play")
+            Icon(if (playing) Icons.Default.Equalizer else Icons.Default.PlayArrow, contentDescription = "Play")
         }
     }
 }
